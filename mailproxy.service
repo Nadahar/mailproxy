@@ -1,0 +1,12 @@
+[Unit]
+Description=Mail Proxy Service
+After=network.target
+ConditionPathExists=/etc/mailproxyd/config.ini
+
+[Service]
+Type=exec
+ExecStart=mailproxyd /etc/mailproxyd/config.ini
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

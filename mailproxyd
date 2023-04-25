@@ -1,5 +1,8 @@
+#! /usr/bin/env python3
+
 import asyncio
 import configparser
+import signal
 import logging
 import os
 import smtplib
@@ -25,13 +28,13 @@ class MailProxyHandler:
         try:
             refused = self._deliver(envelope)
         except smtplib.SMTPRecipientsRefused as e:
-            logging.info('Got SMTPRecipientsRefused: %s', refused)
+            logger.warning('Got SMTPRecipientsRefused: %s', refused)
             return "553 Recipients refused {}".format(' '.join(refused.keys()))
         except smtplib.SMTPResponseException as e:
             return "{} {}".format(e.smtp_code, e.smtp_error)
         else:
             if refused:
-                logging.info('Recipients refused: %s', refused)
+                logger.error('Recipients refused: %s', refused)
             return '250 OK'
 
     # adapted from https://github.com/aio-libs/aiosmtpd/blob/master/aiosmtpd/handlers.py
@@ -56,7 +59,7 @@ class MailProxyHandler:
             finally:
                 s.quit()
         except (OSError, smtplib.SMTPException) as e:
-            logging.exception('got %s', e.__class__)
+            logger.exception('An error occurred while trying to send e-mail: %s', e.__class__)
             # All recipients were refused. If the exception had an associated
             # error code, use it.  Otherwise, fake it with a SMTP 554 status code. 
             errcode = getattr(e, 'smtp_code', 554)
@@ -75,6 +78,12 @@ if __name__ == '__main__':
     if not os.path.exists(config_path):
         raise Exception("Config file not found: {}".format(config_path))
 
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(stream=sys.stdout)
+    logger.addHandler(handler)
+
+    logger.info("Starting mailproxyd with configuration file '{}'".format(config_path))
     config = configparser.ConfigParser()
     config.read(config_path)
     
@@ -87,6 +96,7 @@ if __name__ == '__main__':
     else:
         auth = None
     
+    signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))
     controller = Controller(
         MailProxyHandler(
             host=config.get('remote', 'host'),
@@ -98,6 +108,16 @@ if __name__ == '__main__':
         hostname=config.get('local', 'host', fallback='127.0.0.1'),
         port=config.getint('local', 'port', fallback=25)
     )
-    controller.start()
-    while controller.loop.is_running():
-        sleep(0.2)
+    try:
+        controller.start()
+        logger.info('Mailproxyd is running')
+        while controller.loop.is_running():
+            sleep(0.2)
+
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        logger.info('Stopping mailproxyd')
+        controller.stop()
+        logger.info('Mailproxyd was stopped')
